@@ -1,0 +1,441 @@
+import { View, Text, ScrollView } from '@tarojs/components'
+import { FC, useState } from 'react'
+import Taro from '@tarojs/taro'
+import { Network } from '@/network'
+import { Input } from '@/components/ui/input'
+import { useUserStore } from '@/stores/user'
+import { useReportFormStore } from '@/stores/report-form'
+import {
+  User, GraduationCap, Award, Upload,
+  CircleCheck, Plus, Trash2
+} from 'lucide-react-taro'
+
+type EduType = 'domestic' | 'overseas'
+interface EducationItem {
+  id: string; eduType: EduType; education: string; school: string; major: string
+  degreeCertNo: string; diplomaCertNo: string; overseasCertNo: string; files: string[]
+}
+interface QualificationItem {
+  id: string; certNumber: string; files: string[]
+}
+interface FormData {
+  realName: string; idCard: string
+  educationList: EducationItem[]
+  qualificationList: QualificationItem[]
+}
+
+// 用户明确表示无此证书/不提供，提交时转为空值，不发起该项核验
+const NONE_VALUE = '无'
+const genId = () => Math.random().toString(36).substring(2, 9)
+const emptyEdu = (): EducationItem => ({ id: genId(), eduType: 'domestic', education: '', school: '', major: '', degreeCertNo: '', diplomaCertNo: '', overseasCertNo: '', files: [] })
+const emptyQual = (): QualificationItem => ({ id: genId(), certNumber: '', files: [] })
+
+const STEPS = [
+  { title: '身份信息', icon: User,          required: true  },
+  { title: '学历信息', icon: GraduationCap, required: true  },
+  { title: '职业资格', icon: Award,         required: false },
+]
+
+const Field: FC<{ label: string; required?: boolean; children: React.ReactNode }> = ({ label, required, children }) => (
+  <View style={{ marginBottom: '14px' }}>
+    <View style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '7px' }}>
+      {required && <Text style={{ fontSize: '13px', color: '#ef4444', lineHeight: '1.5' }}>*</Text>}
+      <Text style={{ fontSize: '13px', fontWeight: '500', color: '#374151', lineHeight: '1.5' }}>{label}</Text>
+    </View>
+    {children}
+  </View>
+)
+
+const InputBox: FC<{ focused: boolean; children: React.ReactNode }> = ({ focused, children }) => (
+  <View style={{
+    display: 'flex', alignItems: 'center', gap: '10px',
+    background: focused ? '#eff6ff' : '#f8fafc',
+    borderRadius: '12px', padding: '12px 14px',
+    border: `1.5px solid ${focused ? '#3b82f6' : 'transparent'}`,
+    boxShadow: focused ? '0 0 0 3px rgba(59,130,246,0.08)' : 'none',
+    transition: 'all 0.25s ease',
+  }}>
+    {children}
+  </View>
+)
+
+const ReportFormPage: FC = () => {
+  const [currentStep, setCurrentStep] = useState(0)
+  const [focusField, setFocusField] = useState<string | null>(null)
+  const [btnPressed, setBtnPressed] = useState<string | null>(null)
+  const [formData, setFormData] = useState<FormData>({
+    realName: '', idCard: '',
+    educationList: [emptyEdu()],
+    qualificationList: [],
+  })
+  const { userInfo } = useUserStore()
+  const { setPendingData } = useReportFormStore()
+
+  const setField = (field: keyof FormData, value: string) =>
+    setFormData(prev => ({ ...prev, [field]: value }))
+
+  const setEdu = (id: string, field: keyof EducationItem, value: string) =>
+    setFormData(prev => ({ ...prev, educationList: prev.educationList.map(e => e.id === id ? { ...e, [field]: value } : e) }))
+
+  const setQual = (id: string, field: keyof QualificationItem, value: string) =>
+    setFormData(prev => ({ ...prev, qualificationList: prev.qualificationList.map(q => q.id === id ? { ...q, [field]: value } : q) }))
+
+  const removeEdu = (id: string) => {
+    if (formData.educationList.length <= 1) { Taro.showToast({ title: '至少保留一条学历信息', icon: 'none' }); return }
+    setFormData(prev => ({ ...prev, educationList: prev.educationList.filter(e => e.id !== id) }))
+  }
+  const removeQual = (id: string) =>
+    setFormData(prev => ({ ...prev, qualificationList: prev.qualificationList.filter(q => q.id !== id) }))
+
+  const handleUpload = async (type: 'education' | 'qualification', id: string) => {
+    try {
+      const res = await Taro.chooseImage({ count: 1, sizeType: ['compressed'], sourceType: ['album', 'camera'] })
+      Taro.showLoading({ title: '上传中...' })
+      const up = await Network.uploadFile({ url: '/api/upload', filePath: res.tempFilePaths[0], name: 'file' })
+      const r = typeof up.data === 'string' ? JSON.parse(up.data) : up.data
+      if (r.code === 200 && r.data) {
+        const url = r.data.url
+        if (type === 'education')
+          setFormData(prev => ({ ...prev, educationList: prev.educationList.map(e => e.id === id ? { ...e, files: [...e.files, url] } : e) }))
+        else
+          setFormData(prev => ({ ...prev, qualificationList: prev.qualificationList.map(q => q.id === id ? { ...q, files: [...q.files, url] } : q) }))
+        Taro.showToast({ title: '上传成功', icon: 'success' })
+      }
+    } catch { Taro.showToast({ title: '上传失败', icon: 'none' }) }
+    finally { Taro.hideLoading() }
+  }
+
+  const removeFile = (type: 'education' | 'qualification', id: string, idx: number) => {
+    if (type === 'education')
+      setFormData(prev => ({ ...prev, educationList: prev.educationList.map(e => e.id === id ? { ...e, files: e.files.filter((_, i) => i !== idx) } : e) }))
+    else
+      setFormData(prev => ({ ...prev, qualificationList: prev.qualificationList.map(q => q.id === id ? { ...q, files: q.files.filter((_, i) => i !== idx) } : q) }))
+  }
+
+  const handleNext = () => {
+    if (currentStep === 0 && (!formData.realName || !formData.idCard)) {
+      Taro.showToast({ title: '请填写完整身份信息', icon: 'none' }); return
+    }
+    if (currentStep === 1) {
+      const invalid = formData.educationList.some(e =>
+        e.eduType === 'overseas' ? !e.overseasCertNo : (!e.diplomaCertNo || !e.degreeCertNo))
+      if (invalid) {
+        Taro.showToast({ title: '请填写证书编号，如无请点击"无"', icon: 'none' }); return
+      }
+    }
+    setCurrentStep(s => s + 1)
+  }
+
+  const handleSubmit = () => {
+    if (!formData.realName || !formData.idCard) {
+      Taro.showToast({ title: '请填写完整身份信息', icon: 'none' }); return
+    }
+    setPendingData({
+      userId: userInfo?.id || '',
+      realName: formData.realName,
+      gender: '',
+      idCard: formData.idCard,
+      workHistoryList: [],
+      educationList: formData.educationList
+        .map(e => ({
+          ...e,
+          diplomaCertNo: e.diplomaCertNo === NONE_VALUE ? '' : e.diplomaCertNo,
+          degreeCertNo: e.degreeCertNo === NONE_VALUE ? '' : e.degreeCertNo,
+          overseasCertNo: e.overseasCertNo === NONE_VALUE ? '' : e.overseasCertNo,
+        }))
+        .filter(e => e.eduType === 'overseas' ? e.overseasCertNo : (e.degreeCertNo || e.diplomaCertNo)),
+      qualificationList: formData.qualificationList.filter(q => q.certNumber || q.files.length > 0),
+    })
+    Taro.redirectTo({ url: '/pages/submit-success/index' })
+  }
+
+  // ── 身份表单 ──
+  const renderIdentity = () => (
+    <View>
+      <Field label="真实姓名" required>
+        <InputBox focused={focusField === 'name'}>
+          <Input
+            style={{ flex: 1, background: 'transparent', fontSize: '14px', color: '#0f172a', lineHeight: '1.5' }}
+            placeholder="请输入真实姓名" placeholderStyle="color:#cbd5e1;"
+            value={formData.realName}
+            onFocus={() => setFocusField('name')} onBlur={() => setFocusField(null)}
+            onInput={e => setField('realName', e.detail.value)}
+          />
+        </InputBox>
+      </Field>
+      <Field label="身份证号" required>
+        <InputBox focused={focusField === 'idcard'}>
+          <Input
+            style={{ flex: 1, background: 'transparent', fontSize: '14px', color: '#0f172a', lineHeight: '1.5' }}
+            placeholder="请输入身份证号" placeholderStyle="color:#cbd5e1;"
+            maxlength={18} value={formData.idCard}
+            onFocus={() => setFocusField('idcard')} onBlur={() => setFocusField(null)}
+            onInput={e => setField('idCard', e.detail.value)}
+          />
+        </InputBox>
+      </Field>
+    </View>
+  )
+
+  // ── 学历表单 ──
+  const renderEducation = () => (
+    <View style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      {formData.educationList.map((edu, idx) => (
+        <View key={edu.id} style={{ background: '#f8fafc', borderRadius: '16px', padding: '16px' }}>
+          <View style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+            <View style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <View style={{ width: '22px', height: '22px', borderRadius: '50%', background: '#2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ color: '#fff', fontSize: '11px', fontWeight: '700', lineHeight: '1' }}>{idx + 1}</Text>
+              </View>
+              <Text style={{ fontSize: '14px', fontWeight: '600', color: '#0f172a', lineHeight: '1.5' }}>学历学位 {formData.educationList.length > 1 ? idx + 1 : ''}</Text>
+            </View>
+            {formData.educationList.length > 1 && (
+              <View onClick={() => removeEdu(edu.id)} style={{ padding: '4px' }}>
+                <Trash2 size={17} color="#ef4444" />
+              </View>
+            )}
+          </View>
+
+          {/* 境内/境外学历切换 */}
+          <View style={{ display: 'flex', gap: '10px', marginBottom: '14px' }}>
+            {([['domestic', '境内学历'], ['overseas', '境外学历']] as [EduType, string][]).map(([type, label]) => {
+              const active = edu.eduType === type
+              return (
+                <View
+                  key={type}
+                  onClick={() => setEdu(edu.id, 'eduType', type)}
+                  style={{
+                    flex: 1, borderRadius: '12px', padding: '11px 0',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    background: active ? '#fff' : '#eef0f4',
+                    border: `1.5px solid ${active ? '#3b82f6' : 'transparent'}`,
+                    transition: 'all 0.2s ease',
+                  }}
+                >
+                  <Text style={{ fontSize: '14px', fontWeight: active ? '600' : '400', color: active ? '#2563eb' : '#94a3b8', lineHeight: '1.5' }}>{label}</Text>
+                </View>
+              )
+            })}
+          </View>
+
+          {(edu.eduType === 'domestic' ? [
+            { label: '学历证书编号', field: 'diplomaCertNo', placeholder: '请输入学历证书编号' },
+            { label: '学位证书编号', field: 'degreeCertNo', placeholder: '请输入学位证书编号' },
+          ] : [
+            { label: '国外学历学位认证书编号', field: 'overseasCertNo', placeholder: '请输入国外学历学位认证书编号' },
+          ]).map(row => {
+            const isNone = (edu as any)[row.field] === NONE_VALUE
+            return (
+              <Field key={row.field} label={row.label} required>
+                <InputBox focused={focusField === `${edu.id}-${row.field}`}>
+                  <Input
+                    style={{ flex: 1, background: 'transparent', fontSize: '14px', color: '#0f172a', lineHeight: '1.5' }}
+                    placeholder={row.placeholder} placeholderStyle="color:#cbd5e1;"
+                    value={(edu as any)[row.field]}
+                    onFocus={() => setFocusField(`${edu.id}-${row.field}`)} onBlur={() => setFocusField(null)}
+                    onInput={e => setEdu(edu.id, row.field as keyof EducationItem, e.detail.value)}
+                  />
+                  <View
+                    onClick={() => setEdu(edu.id, row.field as keyof EducationItem, isNone ? '' : NONE_VALUE)}
+                    style={{
+                      flexShrink: 0, padding: '3px 12px', borderRadius: '8px',
+                      background: isNone ? '#eff6ff' : '#fff',
+                      border: `1px solid ${isNone ? '#3b82f6' : '#e2e8f0'}`,
+                      transition: 'all 0.2s ease',
+                    }}
+                  >
+                    <Text style={{ fontSize: '13px', color: isNone ? '#2563eb' : '#64748b', fontWeight: isNone ? '600' : '400', lineHeight: '1.5' }}>无</Text>
+                  </View>
+                </InputBox>
+              </Field>
+            )
+          })}
+        </View>
+      ))}
+
+      <View
+        style={{ borderRadius: '14px', padding: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', border: '1.5px dashed #93c5fd', background: '#eff6ff' }}
+        onClick={() => setFormData(prev => ({ ...prev, educationList: [...prev.educationList, emptyEdu()] }))}
+      >
+        <Plus size={16} color="#2563eb" />
+        <Text style={{ fontSize: '14px', color: '#2563eb', fontWeight: '500', lineHeight: '1.5' }}>添加学历</Text>
+      </View>
+      <Text style={{ fontSize: '11px', color: '#94a3b8', lineHeight: '1.5' }}>可添加多段学历信息，如本科、硕士、博士等</Text>
+    </View>
+  )
+
+  // ── 职业资格表单 ──
+  const renderQualification = () => (
+    <View style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      {formData.qualificationList.map((qual, idx) => (
+        <View key={qual.id} style={{ background: '#f8fafc', borderRadius: '16px', padding: '16px' }}>
+          <View style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+            <View style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <View style={{ width: '22px', height: '22px', borderRadius: '50%', background: '#059669', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ color: '#fff', fontSize: '11px', fontWeight: '700', lineHeight: '1' }}>{idx + 1}</Text>
+              </View>
+              <Text style={{ fontSize: '14px', fontWeight: '600', color: '#0f172a', lineHeight: '1.5' }}>职业资格 {formData.qualificationList.length > 1 ? idx + 1 : ''}</Text>
+            </View>
+            <View onClick={() => removeQual(qual.id)} style={{ padding: '4px' }}>
+              <Trash2 size={17} color="#ef4444" />
+            </View>
+          </View>
+
+          <Field label="证书编号">
+            <InputBox focused={focusField === `${qual.id}-cert`}>
+              <Input
+                style={{ flex: 1, background: 'transparent', fontSize: '14px', color: '#0f172a', lineHeight: '1.5' }}
+                placeholder="请输入证书编号" placeholderStyle="color:#cbd5e1;"
+                value={qual.certNumber}
+                onFocus={() => setFocusField(`${qual.id}-cert`)} onBlur={() => setFocusField(null)}
+                onInput={e => setQual(qual.id, 'certNumber', e.detail.value)}
+              />
+            </InputBox>
+          </Field>
+
+          <Field label="证书照片">
+            <View style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+              {qual.files.map((_, fi) => (
+                <View key={fi} style={{ position: 'relative', width: '72px', height: '72px' }}>
+                  <View style={{ width: '72px', height: '72px', background: '#e2e8f0', borderRadius: '10px' }} />
+                  <View style={{ position: 'absolute', top: '-4px', right: '-4px', width: '18px', height: '18px', background: '#ef4444', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => removeFile('qualification', qual.id, fi)}>
+                    <Text style={{ color: '#fff', fontSize: '12px', lineHeight: '1' }}>×</Text>
+                  </View>
+                </View>
+              ))}
+              <View style={{ width: '72px', height: '72px', border: '1.5px dashed #cbd5e1', borderRadius: '10px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '4px' }} onClick={() => handleUpload('qualification', qual.id)}>
+                <Upload size={18} color="#94a3b8" />
+                <Text style={{ fontSize: '10px', color: '#cbd5e1', lineHeight: '1.3' }}>点击上传</Text>
+              </View>
+            </View>
+          </Field>
+        </View>
+      ))}
+
+      <View
+        style={{ borderRadius: '14px', padding: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', border: '1.5px dashed #6ee7b7', background: '#f0fdf4' }}
+        onClick={() => setFormData(prev => ({ ...prev, qualificationList: [...prev.qualificationList, emptyQual()] }))}
+      >
+        <Plus size={16} color="#059669" />
+        <Text style={{ fontSize: '14px', color: '#059669', fontWeight: '500', lineHeight: '1.5' }}>添加职业资格</Text>
+      </View>
+      <Text style={{ fontSize: '11px', color: '#94a3b8', lineHeight: '1.5' }}>可添加多个职业资格证书，如注册会计师、律师资格证等</Text>
+    </View>
+  )
+
+  const isLast = currentStep === STEPS.length - 1
+
+  return (
+    <View style={{ background: '#f6f8fc', minHeight: '100vh' }}>
+
+      {/* ── 蓝色渐变头部 ── */}
+      <View style={{ background: 'linear-gradient(135deg, #0f2460 0%, #1e40af 50%, #2563eb 100%)', padding: '20px 20px 0', position: 'relative', overflow: 'hidden' }}>
+        <View style={{ position: 'absolute', top: '-30px', right: '-30px', width: '160px', height: '160px', borderRadius: '50%', background: 'radial-gradient(circle, rgba(255,255,255,0.06) 0%, transparent 70%)', pointerEvents: 'none' }} />
+        <Text style={{ fontSize: '22px', fontWeight: '800', color: '#fff', display: 'block', lineHeight: '1.3', letterSpacing: '0.5px' }}>填写信息</Text>
+        <Text style={{ fontSize: '12px', color: 'rgba(255,255,255,0.55)', display: 'block', marginTop: '3px', lineHeight: '1.5', marginBottom: '20px' }}>
+          带 * 为必填项，其他信息可跳过
+        </Text>
+
+        {/* ── 步骤指示器 ── */}
+        <View style={{ background: 'rgba(255,255,255,0.08)', borderRadius: '20px 20px 0 0', padding: '16px 20px 20px' }}>
+          <View style={{ display: 'flex', alignItems: 'center' }}>
+            {STEPS.map((step, i) => (
+              <View key={i} style={{ display: 'flex', alignItems: 'center', flex: i < STEPS.length - 1 ? 1 : 0 }}>
+                <View style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px' }}>
+                  <View style={{
+                    width: '28px', height: '28px', borderRadius: '50%',
+                    background: i < currentStep ? '#10b981' : i === currentStep ? '#fff' : 'rgba(255,255,255,0.2)',
+                    border: i === currentStep ? '2.5px solid #fff' : 'none',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transition: 'all 0.3s ease', flexShrink: 0,
+                  }}>
+                    {i < currentStep
+                      ? <CircleCheck size={16} color="#fff" />
+                      : <Text style={{ fontSize: '12px', fontWeight: '700', color: i === currentStep ? '#1e40af' : 'rgba(255,255,255,0.5)', lineHeight: '1' }}>{i + 1}</Text>
+                    }
+                  </View>
+                  <Text style={{ fontSize: '10px', fontWeight: i === currentStep ? '600' : '400', color: i === currentStep ? '#fff' : 'rgba(255,255,255,0.5)', lineHeight: '1.4', whiteSpace: 'nowrap' }}>
+                    {step.title}
+                  </Text>
+                </View>
+                {i < STEPS.length - 1 && (
+                  <View style={{ flex: 1, height: '2px', background: i < currentStep ? '#10b981' : 'rgba(255,255,255,0.2)', margin: '0 6px', marginBottom: '18px', borderRadius: '1px', transition: 'background 0.3s ease' }} />
+                )}
+              </View>
+            ))}
+          </View>
+        </View>
+      </View>
+
+      {/* ── 表单内容 ── */}
+      <ScrollView scrollY style={{ height: 'calc(100vh - 220px)' }}>
+        <View style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+
+          <View style={{ background: '#fff', borderRadius: '20px', padding: '20px', boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.06)' }}>
+            <View style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
+              <Text style={{ fontSize: '16px', fontWeight: '700', color: '#0f172a', lineHeight: '1.4' }}>
+                {currentStep === 1 ? '学历学位信息' : STEPS[currentStep].title}
+              </Text>
+              {!STEPS[currentStep].required && currentStep > 0 && (
+                <Text
+                  style={{ fontSize: '13px', color: '#94a3b8', lineHeight: '1.5' }}
+                  onClick={() => isLast ? handleSubmit() : setCurrentStep(s => s + 1)}
+                >
+                  跳过
+                </Text>
+              )}
+            </View>
+
+            {currentStep === 0 && renderIdentity()}
+            {currentStep === 1 && renderEducation()}
+            {currentStep === 2 && renderQualification()}
+          </View>
+
+          <View style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', padding: '2px 4px' }}>
+            <Text style={{ fontSize: '13px', color: '#f59e0b', lineHeight: '1', flexShrink: 0, marginTop: '1px' }}>⚠</Text>
+            <Text style={{ fontSize: '12px', color: '#94a3b8', lineHeight: '1.6' }}>
+              带 * 为必填项，其他信息可跳过。提交后平台将进行核查，核查通过后生成报告。
+            </Text>
+          </View>
+
+          {/* ── 底部按钮 ── */}
+          <View style={{ display: 'flex', gap: '12px', paddingBottom: '24px' }}>
+            {currentStep > 0 && (
+              <View
+                style={{
+                  flex: 1, borderRadius: '16px', padding: '14px 0',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: '#fff', border: '1.5px solid #e2e8f0',
+                  transform: btnPressed === 'prev' ? 'scale(0.97)' : 'scale(1)',
+                  transition: 'all 0.2s ease',
+                }}
+                onTouchStart={() => setBtnPressed('prev')} onTouchEnd={() => setBtnPressed(null)} onTouchCancel={() => setBtnPressed(null)}
+                onClick={() => setCurrentStep(s => s - 1)}
+              >
+                <Text style={{ fontSize: '14px', fontWeight: '500', color: '#64748b', lineHeight: '1.5' }}>上一步</Text>
+              </View>
+            )}
+            <View
+              style={{
+                flex: 2, borderRadius: '16px', padding: '14px 0',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: 'linear-gradient(135deg, #1e40af 0%, #2563eb 100%)',
+                boxShadow: '0 6px 20px rgba(37,99,235,0.38)',
+                transform: btnPressed === 'next' ? 'scale(0.97)' : 'scale(1)',
+                transition: 'all 0.2s ease',
+              }}
+              onTouchStart={() => setBtnPressed('next')} onTouchEnd={() => setBtnPressed(null)} onTouchCancel={() => setBtnPressed(null)}
+              onClick={isLast ? handleSubmit : handleNext}
+            >
+              <Text style={{ fontSize: '15px', fontWeight: '700', color: '#fff', lineHeight: '1.5' }}>
+                {isLast ? '提交信息' : '下一步'}
+              </Text>
+            </View>
+          </View>
+        </View>
+      </ScrollView>
+    </View>
+  )
+}
+
+export default ReportFormPage
