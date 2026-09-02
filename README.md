@@ -2,8 +2,6 @@
 
 > 个人职业信用管理平台 —— 由候选人自己发起核验，生成职业信用报告、信用评分与可信简历。
 
-一套 Taro 代码同时运行于 **H5 与微信小程序**。本仓库是**跨端演示版**，用 mock 数据完整跑通全流程，无需后端即可访问。
-
 <p>
   <img alt="Taro" src="https://img.shields.io/badge/Taro-4.1.9-0A79F7" />
   <img alt="React" src="https://img.shields.io/badge/React-18-61DAFB" />
